@@ -1,0 +1,1026 @@
+---
+- name: install chorus
+  hosts: chorus_servers
+  become: true
+  become_user: wlpadmin
+  gather_facts: yes
+  roles:
+    - role: chorus
+      tags: [chorus]
+
+- name: Install controller
+  hosts: controller_servers
+  become: true
+  #vars_files:
+  # - vars/main.yml
+  become_user: wlpadmin
+  gather_facts: yes
+  roles:
+    - role: controller
+      tags: [controller]
+
+- name: Install member
+  hosts: member_servers
+  become: true
+  #vars_files:
+  #- vars/main.yml
+  become_user: wlpadmin
+  gather_facts: yes
+  roles:
+    - role: member
+      tags: [member]
+
+
+- name: install IHS
+  hosts: ihs_servers
+  become_user: wlpadmin
+  gather_facts: yes
+  become: true
+  roles:
+    - role: ihs
+      tags: [ihs]
+
+- name: Integration of web and app server
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: IHS Plugin Configuration
+      ansible.builtin.lineinfile:
+        path: "{{ server_xml_path }}"
+        insertbefore: '</server>'
+        line: <pluginConfiguration pluginInstallRoot="/opt/IBM/IHS/plugin/"/>
+        state: present
+  tags:
+    - afterihs
+
+- name: Integration of web and app
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: IHS Plugin Configuration
+      ansible.builtin.lineinfile:
+        path: "{{ member_server_xml }}"
+        insertbefore: '</server>'
+        line: <pluginConfiguration pluginInstallRoot="/opt/IBM/IHS/plugin/"/>
+        state: present
+  tags:
+    - afterihs1
+- name: Stopping member server
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Stop member
+      ansible.builtin.shell: ssh wlpadmin@"{{ member_ip }}" "/opt/ibm/wlp/bin/server stop {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [stopping_member]
+
+
+- name: Stopping controller
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: Stop awd server
+      ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server stop {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [stopping_controller]
+
+- name:  Starting controller
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: Start controller
+      ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server start {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [starting_controller]
+
+
+- name:  Starting member
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Start member
+      ansible.builtin.shell: ssh wlpadmin@"{{ member_ip }}" "/opt/ibm/wlp/bin/server start {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [starting_member]
+
+
+
+- name: Controller--Plugin-cfg generation
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: generate plgin-cfg file
+      ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/pluginUtility generate --server="{{ server_name }}" --targetPath=/opt/ibm/wlp/usr/servers/"{{ server_name }}"/controller_plugin-cfg.xml;"
+      delegate_to: localhost
+      ignore_errors: yes
+    - name: copy plgin-cfg file
+      copy:
+        src: "/opt/ibm/wlp/usr/servers/{{ server_name }}/controller_plugin-cfg.xml"
+        dest: "/tmp"
+        remote_src: yes
+  tags: [plugin_generate_controller]
+
+
+- name: Member--Plugin-cfg generation
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: generate plgin-cfg file
+      ansible.builtin.shell: ssh wlpadmin@"{{ member_ip }}" "/opt/ibm/wlp/bin/pluginUtility generate --server="{{ server_name }}" --targetPath=/opt/ibm/wlp/usr/servers/"{{ server_name }}"/member_plugin-cfg.xml;"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [plugin_generate_member]
+
+
+
+- name: Member--Plugin-cfg copy to Controller
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file using scp from source to destination
+      ansible.builtin.shell: |
+        scp wlpadmin@{{ member_ip }}:/opt/ibm/wlp/usr/servers/{{ server_name }}/member_plugin-cfg.xml /tmp/
+      args:
+        executable: /bin/bash
+  tags: [member_copy]
+
+
+- name: Controller-Member plugin merging
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file using scp from source to destination
+      ansible.builtin.shell: |
+        /opt/ibm/wlp/bin/pluginUtility merge --sourcePath=/tmp/controller_plugin-cfg.xml,/tmp/member_plugin-cfg.xml --targetPath=/opt/ibm/wlp/bin
+      args:
+        executable: /bin/bash
+  tags: [merging]
+
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file using scp from source to destination
+      ansible.builtin.shell: |
+        cp /opt/ibm/wlp/bin/merged-plugin-cfg.xml /opt/ibm/wlp/bin/plugin-cfg.xml
+      args:
+        executable: /bin/bash
+  tags: [renaming]
+
+- name: Adding httpsession to plugin-cfg.yml
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Adding affinity http sesion
+      community.general.xml:
+        path: "/opt/ibm/wlp/bin/plugin-cfg.xml"
+        xpath: /Config
+        attribute: AffinityOn
+        value: "true"
+        state: present
+  tags: [addinghttpsession]
+
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file from controller to bastion
+      fetch:
+        src: "/opt/ibm/wlp/bin/plugin-cfg.xml"
+        dest: "/tmp/"
+        flat: yes
+  tags: [copyto_bastion]
+
+
+- name: Copy plugin from bastion to webserver1
+  hosts: ihs_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file from bastion to web1
+      copy:
+        src: "/tmp/plugin-cfg.xml"
+        dest: "/opt/ibm/IHS/plugin/config/webserver1/"
+        mode: 0755
+  tags: [bastionto_ihs]
+
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: ihs_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Delete Webprofile-8.0 block from server.xml
+      ansible.builtin.xml:
+        path: "/opt/ibm/IHS/plugin/config/webserver1/plugin-cfg.xml"
+        xpath: "/Config/VirtualHostGroup[@Name='default_host_1_1']/VirtualHost[@Name='{{ item }}']"
+        state: present
+        pretty_print: yes
+      loop:
+        - "*:20001"
+        - "*:10001"
+  tags: [adding_entry1]
+
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: ihs_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Delete Webprofile-8.0 block from server.xml
+      ansible.builtin.xml:
+        path: "/opt/ibm/IHS/plugin/config/webserver1/plugin-cfg.xml"
+        xpath: "/Config/VirtualHostGroup[@Name='/cell/sharedCell_2/vHostGroup/shared_host_0']/VirtualHost[@Name='{{ item }}']"
+        state: present
+        pretty_print: yes
+      loop:
+        - "*:20001"
+        - "*:10001"
+  tags: [adding_entry2]
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: ihs_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Insert LoadModule and WebSpherePluginConfig inside <IfFile>
+      ansible.builtin.lineinfile:
+        path: /opt/ibm/IHS/conf/httpd.conf
+        line: "{{ item }}"
+        insertafter: "^<IfFile.*/plugin-cfg.xml>"
+        state: present
+      loop:
+        - "  LoadModule was_ap24_module plugin/bin/mod_was_ap24_http.so"
+        - "  WebSpherePluginConfig /opt/ibm/IHS/plugin/config/webserver1/plugin-cfg.xml"
+  tags: [load_module]
+
+
+- name: Install glibc and pcre on RHEL
+  hosts: ihs_servers
+  become: true
+  tasks:
+    - name: Ensure required packages are installed
+      ansible.builtin.yum:
+        name:
+          - glibc
+          - pcre
+        state: present
+  tags: [pkginstall]
+
+- name: Validate XML file using xmllint
+  hosts: ihs_servers
+  tasks:
+    - name: Check if XML file is well-formed
+      command: xmllint --noout /opt/ibm/IHS/plugin/config/webserver1/plugin-cfg.xml
+      register: xmllint_result
+      ignore_errors: yes
+
+    - name: Fail if XML is invalid
+      fail:
+        msg: "The XML file is not valid!"
+      when: xmllint_result.rc != 0
+  tags: [xml_lint]
+
+  - name: Generate plugin key database and stash file
+  hosts: ihs_servers
+  become: yes
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        ./gskcapicmd -keydb -create
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -pw changeit
+        -type cms
+        -stash
+      args:
+        chdir: /opt/ibm/IHS/bin/
+      register: keydb_result
+      changed_when: "'already exists' not in keydb_result.stderr"
+    - name: Show command output
+      ansible.builtin.debug:
+        var: keydb_result
+  tags: [keydb_gen]
+
+- name: Fix permissions in plugin webserver directory
+  hosts: ihs_servers
+  become: yes
+  tasks:
+    - name: Set ownership and permissions recursively
+      ansible.builtin.file:
+        path: /opt/ibm/IHS/plugin/config/webserver1
+        owner: wlpadmin
+        group: enduser
+        mode: "0755"
+        recurse: yes
+  tags: [permissions]
+
+- name: Copy from Controller to bastion
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file1 from controller to bastion
+      fetch:
+        src: "{{ item }}"
+        dest: "/tmp/"
+        flat: yes
+      loop:
+        - /opt/ibm/wlp/usr/servers/awdserver/resources/security/key.p12
+        - /opt/ibm/wlp/usr/servers/awdserver/resources/security/trust.p12
+  tags: [copykey_bastion]
+
+- name: Copy plugin from bastion to webserver1
+  hosts: ihs_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file from bastion to web1
+      copy:
+        src: "{{ item }}"
+        dest: "/tmp/"
+        mode: 0755
+      loop:
+        - /tmp/key.p12
+        - /tmp/trust.p12
+  tags: [keyto_ihs]
+
+- name: Copy from member to bastion
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file1 from controller to bastion
+      fetch:
+        src: "{{ item.src }}"
+        dest: "/tmp/{{ item.dest }}"
+        flat: yes
+      loop:
+        - { src: "/opt/ibm/wlp/usr/servers/{{ server_name }}/resources/security/key.p12" ,dest: "mem_key.p12" }
+        - { src: "/opt/ibm/wlp/usr/servers/{{ server_name }}/resources/security/trust.p12" ,dest: "mem_trust.p12"}
+  tags: [copymemberkey_bastion]
+
+- name: Copy plugin from bastion to webserver1
+  hosts: ihs_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file from bastion to web1
+      copy:
+        src: "{{ item }}"
+        dest: "/tmp/"
+        mode: 0755
+      loop:
+        - /tmp/mem_key.p12
+        - /tmp/mem_trust.p12
+  tags: [memberkeyto_ihs]
+
+- name: Capturing aliasname of Key.p12
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.shell: |
+        keytool -list -keystore /tmp/key.p12 -storetype PKCS12 -storepass changeit -file liberty_key.crt -rfc|grep -i alias|awk '{print $3}'
+      register: key_p12_alias_names
+      changed_when: false
+    - name: Set alias list variable
+      set_fact:
+        alias_list: "{{ key_p12_alias_names.stdout_lines }}"
+    - name: Print aliases
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ alias_list }}"
+    - name: Set individual alias
+      set_fact:
+        alias_key1_p12: "{{ alias_list[0] }}"
+    - name: Use alias 1
+      debug:
+        msg: "First alias: {{ alias_key1_p12 }}"
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        keytool -exportcert
+        -keystore /tmp/key.p12
+        -storetype PKCS12
+        -storepass changeit
+        -alias {{ alias_key1_p12 }}
+        -file /tmp/key.crt
+        -rfc
+      register: key_p12_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: key_p12_result
+  tags: [key_p12_results]
+
+#- name: Generate plugin key database and stash file
+#  hosts: ihs_servers
+#  become: yes
+#  become_user: wlpadmin
+#  tasks:
+#    - name: Create plugin key database and stash file
+#      ansible.builtin.command: >
+#        keytool -exportcert
+#        -keystore /tmp/key.p12
+#        -storetype PKCS12
+#        -storepass changeit
+#        -alias default
+#        -file /tmp/key.crt
+#        -rfc
+#      args:
+#       chdir: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/
+#      register: keytool_result
+#      changed_when: "'already exists' not in keytool_result.stderr"
+#    - name: Show command output
+#      ansible.builtin.debug:
+#        var: keytool_result
+#  tags: [keytool_gen]
+
+- name: Capturing alias_ name
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.shell: |
+        keytool -list -keystore /tmp/trust.p12 -storetype PKCS12 -storepass changeit -file liberty_key.crt -rfc|grep -i alias|awk '{print $3}'
+      register: alias_names
+      changed_when: false
+    - name: Set alias list variable
+      set_fact:
+        alias_list: "{{ alias_names.stdout_lines }}"
+    - name: Print aliases
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ alias_list }}"
+    - name: Set individual alias
+      set_fact:
+        alias_1: "{{ alias_list[0] }}"
+        alias_2: "{{ alias_list[1] }}"
+    - name: Use alias 1
+      debug:
+        msg: "First alias: {{ alias_1 }}"
+    - name: Use alias 2
+      debug:
+        msg: "Second alias: {{ alias_2 }}"
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        keytool -exportcert
+        -keystore /tmp/trust.p12
+        -storetype PKCS12
+        -storepass changeit
+        -alias {{ alias_1 }}
+        -file /tmp/trust1.crt
+        -rfc
+#      args:
+#       chdir: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/
+      register: trust1_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: trust1_result
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        keytool -exportcert
+        -keystore /tmp/trust.p12
+        -storetype PKCS12
+        -storepass changeit
+        -alias {{ alias_2 }}
+        -file /tmp/trust2.crt
+        -rfc
+#      args:
+#       chdir: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/
+      register: trust2_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: trust2_result
+  tags: [trust2_result1]
+
+- name: Setting permissions for .crt files
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Ensure wlpadmin owns .crt and perms are 755
+      ansible.builtin.find:
+        paths: /tmp
+        patterns: "*.crt"
+      register: crt_files
+
+    - name: Set permissions for found .crt files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: '0755'
+      loop: "{{ crt_files.files }}"
+  tags: [applying_crt_perm]
+
+
+- name: Running gskcapicmd
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Update plugin key database with key.crt
+      ansible.builtin.command: >
+        /opt/ibm/IHS/bin/gskcapicmd -cert -add
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -stashed
+        -label key.crt
+        -file /tmp/key.crt
+        -format ascii
+        -trust enable
+      register: gskcapi_key_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: gskcapi_key_result
+    - name: Update plugin key database with Trust1.crt
+      ansible.builtin.command: >
+        /opt/ibm/IHS/bin/gskcapicmd -cert -add
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -stashed
+        -label trust1.crt
+        -file /tmp/trust1.crt
+        -format ascii
+        -trust enable
+      register: gskcapi_trust1_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: gskcapi_trust1_result
+    - name: Update plugin key database with Trust2.crt
+      ansible.builtin.command: >
+        /opt/ibm/IHS/bin/gskcapicmd -cert -add
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -stashed
+        -label trust2.crt
+        -file /tmp/trust2.crt
+        -format ascii
+        -trust enable
+      register: gskcapi_trust2_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: gskcapi_trust2_result
+  tags: [gskcapi_result1]
+
+###member_key.p12,trust.p12_starts
+################################
+
+- name: Capturing aliasname of Mem_Key.p12
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.shell: |
+        keytool -list -keystore /tmp/mem_key.p12 -storetype PKCS12 -storepass changeit -file mem_key.crt -rfc|grep -i alias|awk '{print $3}'
+      register: mem_key_p12_alias_names
+      changed_when: false
+    - name: Set alias list variable
+      set_fact:
+        alias_list: "{{ mem_key_p12_alias_names.stdout_lines }}"
+    - name: Print aliases
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ alias_list }}"
+    - name: Set individual alias
+      set_fact:
+        alias_mem_key1_p12: "{{ alias_list[0] }}"
+    - name: Use alias 1
+      debug:
+        msg: "First alias: {{ alias_mem_key1_p12 }}"
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        keytool -exportcert
+        -keystore /tmp/mem_key.p12
+        -storetype PKCS12
+        -storepass changeit
+        -alias {{ alias_mem_key1_p12 }}
+        -file /tmp/mem_key.crt
+        -rfc
+      register: mem_key_p12_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: mem_key_p12_result
+  tags: [mem_key_p12_results]
+ 
+ #- name: Generate plugin key database and stash file
+#  hosts: ihs_servers
+#  become: yes
+#  become_user: wlpadmin
+#  tasks:
+#    - name: Create plugin key database and stash file
+#      ansible.builtin.command: >
+#        keytool -exportcert
+#        -keystore /tmp/key.p12
+#        -storetype PKCS12
+#        -storepass changeit
+#        -alias default
+#        -file /tmp/key.crt
+#        -rfc
+#      args:
+#       chdir: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/
+#      register: keytool_result
+#      changed_when: "'already exists' not in keytool_result.stderr"
+#    - name: Show command output
+#      ansible.builtin.debug:
+#        var: keytool_result
+#  tags: [keytool_gen]
+
+- name: Capturing alias_ name
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.shell: |
+        keytool -list -keystore /tmp/mem_trust.p12 -storetype PKCS12 -storepass changeit -file mem_trust.crt -rfc|grep -i alias|awk '{print $3}'
+      register: trust1_mem_alias_names
+      changed_when: false
+    - name: Set alias list variable
+      set_fact:
+        mem_alias_list: "{{ trust1_mem_alias_names.stdout_lines }}"
+    - name: Print aliases
+      debug:
+        msg: "{{ item }}"
+      loop: "{{ mem_alias_list }}"
+    - name: Set individual alias
+      set_fact:
+        trust1_mem_alias_list: "{{ mem_alias_list[0] }}"
+        trust2_mem_alias_list: "{{ mem_alias_list[1] }}"
+    - name: Use alias 1
+      debug:
+        msg: "First alias: {{ trust1_mem_alias_list }}"
+    - name: Use alias 2
+      debug:
+        msg: "Second alias: {{ trust2_mem_alias_list }}"
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        keytool -exportcert
+        -keystore /tmp/mem_trust.p12
+        -storetype PKCS12
+        -storepass changeit
+        -alias {{ trust1_mem_alias_list }}
+        -file /tmp/mem_trust1.crt
+        -rfc
+#      args:
+#       chdir: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/
+      register: trust1_mem_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: trust1_mem_result
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        keytool -exportcert
+        -keystore /tmp/mem_trust.p12
+        -storetype PKCS12
+        -storepass changeit
+        -alias {{ trust2_mem_alias_list }}
+        -file /tmp/mem_trust2.crt
+        -rfc
+#      args:
+#       chdir: /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/
+      register: trust2_mem_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: trust2_mem_result
+  tags: [trust2_mem_result1]
+
+
+- name: Setting permissions for .crt files
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Ensure wlpadmin owns .crt and perms are 755
+      ansible.builtin.find:
+        paths: /tmp
+        patterns: "*.crt"
+      register: mem_crt_files
+
+    - name: Set permissions for found .crt files
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        mode: '0755'
+      loop: "{{ mem_crt_files.files }}"
+  tags: [applying_mem_crt_perm]
+
+- name: Running gskcapicmd
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  tasks:
+    - name: Update plugin key database with key.crt
+      ansible.builtin.command: >
+        /opt/ibm/IHS/bin/gskcapicmd -cert -add
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -stashed
+        -label mem_key.crt
+        -file /tmp/mem_key.crt
+        -format ascii
+        -trust enable
+      register: gskcapi_mem_key_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: gskcapi_mem_key_result
+    - name: Update plugin key database with Trust1.crt
+      ansible.builtin.command: >
+        /opt/ibm/IHS/bin/gskcapicmd -cert -add
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -stashed
+        -label mem_trust1.crt
+        -file /tmp/mem_trust1.crt
+        -format ascii
+        -trust enable
+      register: gskcapi_mem_trust1_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: gskcapi_mem_trust1_result
+    - name: Update plugin key database with Trust2.crt
+      ansible.builtin.command: >
+        /opt/ibm/IHS/bin/gskcapicmd -cert -add
+        -db /opt/ibm/IHS/plugin/config/webserver1/plugin-key.kdb
+        -stashed
+        -label mem_trust2.crt
+        -file /tmp/mem_trust2.crt
+        -format ascii
+        -trust enable
+      register: gskcapi_mem_trust2_result
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: gskcapi_mem_trust2_result
+  tags: [gskcapi_mem_result11]
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: all
+  gather_facts: yes
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Copy file from controller to bastion
+      fetch:
+        src: "/opt/chorus/webserver.zip"
+        dest: "/tmp/"
+        flat: yes
+      when: ansible_host == hostvars[groups['controller_servers'][0]]['ansible_host']
+
+    - name: Copy file from bastion to web1
+      copy:
+        src: "/tmp/webserver.zip"
+        dest: "/opt/ibm/IHS/htdocs/"
+        mode: 0755
+      #when: ansible_host == hostvars[groups['ihs_servers'][0]]['ansible_host']
+      when: inventory_hostname in groups ['ihs_servers']
+  tags: [webserver_zip_copy]
+
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: controller_servers
+  gather_facts: yes
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: Downlowd chorus bin from Github
+      ansible.builtin.get_url:
+        url: "{{ ca_cert_url }}/{{ item }}"
+        dest: "{{ ca_cert_dir }}/{{ item }}"
+        mode: '0755'
+      loop: "{{ github_files }}"
+  tags: [ca_cert_download_con]
+
+
+- name: Rename merged plugin to plugin-cfg.yml
+  hosts: member_servers
+  gather_facts: yes
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Downlowd chorus bin from Github
+      ansible.builtin.get_url:
+        url: "{{ ca_cert_url }}/{{ item }}"
+        dest: "{{ ca_cert_dir }}/{{ item }}"
+        mode: '0755'
+      loop: "{{ github_files }}"
+  tags: [ca_cert_download_mem]
+
+- name: Importing root certificates in Controller
+  hosts: controller_servers
+  become: yes
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/jre/bin/keytool -import
+        -keystore /opt/ibm/wlp/usr/servers/awdserver/resources/security/trust.p12
+        -trustcacerts
+        -storepass changeit
+        -alias {{ item.alias }}
+        -file "{{ ca_cert_dir }}/{{ item.file }}"
+        -noprompt
+      loop: "{{ certs_import }}"
+      register: ca_cert_importing
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: ca_cert_importing
+  tags: [ca_cert_importing1]
+
+
+- name: Importing root certificates in Member
+  hosts: member_servers
+  become: yes
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Create plugin key database and stash file
+      ansible.builtin.command: >
+        /usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/jre/bin/keytool -import
+        -keystore /opt/ibm/wlp/usr/servers/{{ server_name }}/resources/security/trust.p12
+        -trustcacerts
+        -storepass changeit
+        -alias {{ item.alias }}
+        -file "{{ ca_cert_dir }}/{{ item.file }}"
+        -noprompt
+      loop: "{{ certs_import }}"
+      register: ca_cert_importing_member
+      changed_when: false
+    - name: Show command output
+      ansible.builtin.debug:
+        var: ca_cert_importing_member
+  tags: [ca_cert_importing_member1]
+
+- name: Stopping member server final
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Stop member
+      ansible.builtin.shell: ssh wlpadmin@"{{ member_ip }}" "/opt/ibm/wlp/bin/server stop {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [stopping_member]
+
+- name: Stopping controller final
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: Stop awd server
+      ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server stop {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [stopping_controller]
+
+
+- name:  Starting controller final
+  hosts: controller_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/controller/vars/main.yml
+  tasks:
+    - name: Start controller
+      ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server start {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [starting_controller]
+
+- name:  Starting member final
+  hosts: member_servers
+  become: true
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/member/vars/main.yml
+  tasks:
+    - name: Start member
+      ansible.builtin.shell: ssh wlpadmin@"{{ member_ip }}" "/opt/ibm/wlp/bin/server start {{ server_name }};"
+      delegate_to: localhost
+      ignore_errors: yes
+  tags: [starting_member]
+
+
+- name: Restarting httpd service in IHS servers final
+  hosts: ihs_servers
+  become: yes
+  become_user: wlpadmin
+  vars_files:
+    - /home/wlpadmin/roles/ihs/vars/main.yml
+  tasks:
+  - name: Kill old httpd process
+    ansible.builtin.shell: "pgrep -f 'httpd'| xargs -r kill -9"
+    ignore_errors: yes
+
+  - name: Stop IHS server
+    ansible.builtin.command: "./apachectl stop"
+    args:
+      chdir: "/opt/ibm/IHS/bin"
+    ignore_errors: yes
+
+  - name: Start IHS server
+    ansible.builtin.command: "./apachectl start"
+    args:
+      chdir: "/opt/ibm/IHS/bin"
+    ignore_errors: yes
+
+  - name: Status IHS server
+    ansible.builtin.shell: "ps -ef|grep -i httpd"
+    register: httpd_process
+  tags: [ihs_restart_final]
+
+#- name: Removing the ssh_key
+#  hosts: all
+#  become: yes
+#  become_user: wlpadmin
+#  vars_files:
+#    - /home/wlpadmin/roles/ihs/vars/main.yml
+#  tasks:
+#  - name: Removing ssh key
+#    ansible.builtin.file:
+#      path: /tmp/id_rsa*
+#      state: absent
+#  tags: [remove_ssh_key]
+ 
+ 
+
