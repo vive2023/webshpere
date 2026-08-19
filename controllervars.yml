@@ -1,0 +1,220 @@
+---
+# vars file for websphere
+liberty_url: "https://nw.net/artifactory/vendor-artifacts/IBM/Liberty/wlp-webProfile8-24.0.0.3.zip"
+install_dir: "/opt/ibm"
+install_dir1: "/opt/ibm/wlp/usr/servers/{{ server_name }}/lib"
+jdbc_location: "https://download.oracle.com/otn-pub/otn_software/jdbc/1928/ojdbc8.jar"
+server_name: "awdserver"
+controller_ip: "{{ hostvars[groups['controller_servers'][0]]['ansible_host'] }}"
+awdwar_file_location: "/opt/chorus/jee/websphere/awd.war"
+apps_dir: "/opt/ibm/wlp/usr/servers/{{ server_name }}/apps/"
+retrive_war_location: "https://github.net/nw/nf-awd-test-cdk/raw/main/tests/RetrieveObjectWrapper.war"
+keystore_password: "changeit"
+liberty_zip: "{{ install_dir }}/wlp-webProfile8-24.0.0.3.zip"
+server_xml_path: "{{ install_dir }}/wlp/usr/servers/{{ server_name }}/server.xml"
+jvm_options_path: "{{ install_dir }}/wlp/usr/servers/{{ server_name }}/jvm.options"
+logs_path: "{{ install_dir }}/wlp/usr/servers/{{ server_name }}/logs"
+ca_cert_git: "https://github.net/nw/ca-certs"
+ca_cert_dir: "/opt/ibm/wlp/usr/servers/{{ server_name }}/resources/security"
+include_xml_path: "{{ install_dir }}/wlp/usr/servers/{{ server_name }}/collective-create-include.xml"
+include_line: '<include location="${server.config.dir}/collective-create-include.xml" />'
+dcd_file_git: "https://github.net/nw/nf-awd-test-cdk/raw/main/utils/DCD_POC/awd-saml.jks"
+dcd_resources_dir: "/opt/ibm/wlp/usr/shared/resources"
+keystore_line: '<keyStore id="defaultKeyStore" location="/opt/ibm/wlp/usr/servers/{{ server_name }}/resources/security/key.p12" password="{{ encrypted_password }}" />'
+feature_manager_block: |
+  <featureManager>
+      <feature>adminCenter-1.0</feature>
+      <feature>collectiveController-1.0</feature>
+      <feature>appSecurity-2.0</feature>
+      <feature>servlet-4.0</feature>
+      <feature>jdbc-4.2</feature>
+      <feature>jndi-1.0</feature>
+      <feature>restConnector-2.0</feature>
+      <feature>localConnector-1.0</feature>
+      <feature>transportSecurity-1.0</feature>
+      <feature>jaxws-2.2</feature>
+      <feature>ssl-1.0</feature>
+  </featureManager>
+
+
+
+
+
+cluster_block: |
+  <featureManager>
+      <feature>clusterMember-1.0</feature>
+  </featureManager>
+  <clusterMember name="wlpCluster"/>
+userid: "wlpadmin"
+groupid: "enduser"
+jdk_version: 8
+bindphase: "FRc+Kis3bmk="
+ldap: "pilot"
+NRAgent: "8.22.0"
+wlp_version: "24.0.0.12"
+wlp_flavor: "webProfile8"
+httpd_endpoint: |
+  <!-- To access this server from a remote client add a host attribute to the following element, e.g. host="*" -->
+  <httpEndpoint id="defaultHttpEndpoint"
+                  host="*"
+                  httpPort="9080"
+                  httpsPort="9443" >
+  </httpEndpoint>
+
+
+
+jassmodule_block: |
+  <jaasLoginModule className="com.dstawd.authentication.ADLoginModule" classProviderRef="awdServer" controlFlag="SUFFICIENT" id="ADLoginModule">
+  </jaasLoginModule>
+
+
+
+  <jaasLoginContextEntry id="ADLogin" loginModuleRef="ADLoginModule" name="ADLogin"/>
+  <!--
+  <jaasLoginModule
+  id="AWDLoginModule"
+  classProviderRef="awdServer"
+  className="com.dstawd.authentication.AWDLoginModule"
+  controlFlag="REQUIRED">
+  </jaasLoginModule>
+  <jaasLoginContextEntry
+  id="AWDLogin"
+  name="AWDLogin"
+  loginModuleRef="AWDLoginModule"
+  />
+  -->
+  <library id="cbpmLib">
+  <fileset dir="${server.config.dir}/lib" includes="*.jar"/>
+  </library>
+  <application context-root="awdServer" location="awd.war" id="awdServer">
+  <classloader commonLibraryRef="cbpmLib"/>
+  <application-bnd>
+  <security-role name="AWDAdmin">
+  <user name="dstsetup"/>
+  </security-role>
+  </application-bnd>
+  </application>
+  <application context-root="RetrieveObjectWrapper" location="RetrieveObjectWrapper.war" type="war" id="RetrieveObjectWrapper">
+  </application>
+  <httpSession cookieSecure="true" cookieHttpOnly="false"/>
+  <httpSession cloneId="{{ server_name }}"/>
+  <transaction
+  recoverOnStartup="true"
+  totalTranLifetimeTimeout="300s"
+  propogatedOrBMTTranLifetimeTimeout="300s"
+  heuristicRetryLimit="0"
+  acceptHeuristicHazard="false"
+  />
+
+
+
+jvm_options_variable: |
+  -Dcontainer.type=wlp
+  ## JVM Heap Size and Garbage Collector
+  -Xms4096m
+  -Xmx4096m
+  # -XX:+UseG1GC
+  # -Dawd.process.mode=interactive
+  ##Set up and enable logging
+  -DAFTHIPAALoggingFilter.directory=/opt/ibm/wlp/usr/servers/awdserver/awdserver/logs
+  -DAFTHIPAALoggingFilter.enable=true
+
+
+
+quicksec_executor_remotefile: |
+  <quickStartSecurity userName="dstsetup" userPassword="password" />
+  <executor coreThreads="8" maxThreads="32"/>
+  <remoteFileAccess>
+    <writeDir>${server.config.dir}</writeDir>
+  </remoteFileAccess>
+  <httpSession
+    invalidationTimeout="10h"
+    cookieHttpOnly="true"
+    cookieSecure="true"/>
+
+
+
+ca_cert_url: https://github.net/Nationwide/ca-certs/raw/master
+github_files:
+  -  nw-cdt-root-v1.cer
+  -  nw-cdt-root-v2.cer
+  -  nw-general-v1.cer
+  -  nw-general-v10.cer
+  -  nw-general-v2.cer
+  -  nw-general-v5.cer
+  -  nw-general-v6.cer
+  -  nw-root-v1.cer
+  -  nw-root-v2.cer
+  -  nw-websphere-v7.cer
+  -  org-ca.cer
+  -  zscaler-root.cer
+
+
+
+certs_import:
+   - { alias: "zscaler-root", file: "zscaler-root.cer" }
+   - { alias: "org-ca", file: "org-ca.cer" }
+   - { alias: "nw-websphere-v7", file: "nw-websphere-v7.cer" }
+   - { alias: "nw-root-v2", file: "nw-root-v2.cer" }
+   - { alias: "nw-root-v1", file: "nw-root-v1.cer" }
+   - { alias: "nw-general-v6", file: "nw-general-v6.cer" }
+   - { alias: "nw-general-v5", file: "nw-general-v5.cer" }
+   - { alias: "nw-general-v2", file: "nw-general-v2.cer" }
+   - { alias: "nw-general-v10", file: "nw-general-v10.cer" }
+   - { alias: "nw-general-v1", file: "nw-general-v1.cer" }
+   - { alias: "nw-cdt-root-v2", file: "nw-cdt-root-v2.cer" }
+   - { alias: "nw-cdt-root-v1", file: "nw-cdt-root-v1.cer" }
+
+
+
+sso_file:
+  - AWDNF-7859-IT.xml
+  - AWDNF-7859-IT-SP.xml
+sso_url: "https://github.net/nw/nf-awd-test-cdk/raw/main/utils/SSO_POC"
+
+db_jdbc_block: |
+  <dataSource jndiName="jdbc/awddb" type="javax.sql.XADataSource">
+  <jdbcDriver libraryRef="cbpmLib"/>
+  <connectionManager maxPoolSize="30" minPoolSize="5" connectionTimeout="600"/>
+  <properties.oracle
+      url= "{{ db_url_1 }}"
+      user= "{{ db_user_1 }}"
+      password= "{{ db_password_1 }}" />
+  </dataSource> 
+
+  <dataSource jndiName="jdbc/awdbidb" type="javax.sql.XADataSource">
+  <jdbcDriver libraryRef="cbpmLib"/>
+  <connectionManager maxPoolSize="30" minPoolSize="5" connectionTimeout="600"/>
+  <properties.oracle
+      url= "{{ db_url_2 }}"
+      user= "{{ db_user_2 }}"
+      password= "{{ db_password_2 }}" />
+  </dataSource> 
+
+  <dataSource jndiName="jdbc/awdcommdb" type="javax.sql.XADataSource">
+  <jdbcDriver libraryRef="cbpmLib"/>
+  <connectionManager maxPoolSize="30" minPoolSize="5" connectionTimeout="600"/>
+  <properties.oracle
+      url= "{{ db_url_3 }}"
+      user= "{{ db_user_3 }}"
+      password= "{{ db_password_3 }}" />
+  </dataSource> 
+
+  <dataSource jndiName="jdbc/awdlookupdb" type="javax.sql.XADataSource">
+  <jdbcDriver libraryRef="cbpmLib"/>
+  <connectionManager maxPoolSize="30" minPoolSize="5" connectionTimeout="600"/>
+  <properties.oracle
+      url= "{{ db_url_4 }}"
+      user= "{{ db_user_4 }}"
+      password= "{{ db_password_4 }}" />
+  </dataSource> 
+
+  <dataSource jndiName="jdbc/awdcustom" type="javax.sql.XADataSource">
+  <jdbcDriver libraryRef="cbpmLib"/>
+  <connectionManager maxPoolSize="30" minPoolSize="5" connectionTimeout="600"/>
+  <properties.oracle
+      url= "{{ db_url_5 }}"
+      user= "{{ db_user_5 }}"
+      password= "{{ db_password_5 }}" />
+  </dataSource>
+ 

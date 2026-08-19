@@ -1,0 +1,327 @@
+---
+
+- name: Gather facts inside role
+  ansible.builtin.setup:
+    gather_subset:
+      - env   # only environment variables
+      - network
+
+- name: Ensure /opt/ibm directory exists
+  ansible.builtin.file:
+    path: "{{ install_dir }}"
+    state: directory
+    mode: '0755'
+    owner: wlpadmin
+    group: enduser
+  become_user: root
+  become: yes
+
+- name: Download Liberty package
+  ansible.builtin.get_url:
+    url: "{{ liberty_url }}"
+    dest: "{{ liberty_zip }}"
+    mode: '0644'
+
+- name: Unzip Liberty package
+  ansible.builtin.unarchive:
+    src: "{{ liberty_zip }}"
+    dest: "{{ install_dir }}"
+    remote_src: yes
+
+
+
+- name: Create Liberty server
+  ansible.builtin.command: "./server create {{ server_name }}"
+  args:
+    chdir: "{{ install_dir }}/wlp/bin"
+
+
+
+- name: Start Liberty server
+  ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server start awdserver;"
+  delegate_to: localhost
+  ignore_errors: yes
+
+
+- name: Run collective create
+  ansible.builtin.command: "./collective create {{ server_name }} --keystorePassword={{ keystore_password }} --createConfigFile"
+  args:
+    chdir: "{{ install_dir }}/wlp/bin"
+
+- name: Create the jvm.options file
+  ansible.builtin.file:
+    path: "/opt/ibm/wlp/usr/servers/{{ server_name }}/jvm.options"
+    state: touch
+    mode: '0755'
+
+- name: Set JAVA_HOME in server.env (8)
+  ansible.builtin.lineinfile:
+    path: "/opt/ibm/wlp/usr/servers/{{ server_name }}/server.env"
+    line: "JAVA_HOME=/etc/alternatives/jre_1.8.0"
+    insertafter: EOF
+    create: yes
+  when: jdk_version in [8]
+
+- name: Remove all </server> tags from server.xml
+  ansible.builtin.replace:
+    path: "{{ server_xml_path }}"
+    regexp: "</server>"
+    replace: ""
+
+- name: Remove all </server> tags from collective-create-include.xml
+  ansible.builtin.replace:
+    path: "{{ include_xml_path }}"
+    regexp: "</server>"
+    replace: ""
+
+- name: Add include line to server.xml
+  ansible.builtin.lineinfile:
+    path: "{{ server_xml_path }}"
+    insertafter: '.*<server.*>'
+    line: "{{ include_line }}"
+    state: present
+
+- name: Install adminCenter feature
+  ansible.builtin.command: "./featureUtility installFeature adminCenter-1.0 --acceptLicense"
+  args:
+    chdir: "{{ install_dir }}/wlp/bin"
+
+- name: Install collectiveController feature
+  ansible.builtin.command: "./featureUtility installFeature collectiveController-1.0 --acceptLicense"
+  args:
+    chdir: "{{ install_dir }}/wlp/bin"
+
+- name: Install jaxws-2.2 feature
+  ansible.builtin.command: "./installUtility install jaxws-2.2"
+  args:
+    chdir: "{{ install_dir }}/wlp/bin"
+
+
+- name: Add adminCenter and collectiveController features inside featureManager in server.xml
+  ansible.builtin.blockinfile:
+    path: "{{ server_xml_path }}"
+    block: "{{ feature_manager_block }}"
+    marker: ""
+
+- name: Install clusterMember feature
+  ansible.builtin.command: "./featureUtility installFeature clusterMember-1.0 --acceptLicense"
+  args:
+    chdir: "{{ install_dir }}/wlp/bin"
+
+- name: Add clusterMember feature to include XML
+  ansible.builtin.blockinfile:
+    path: "{{ include_xml_path }}"
+    block: "{{ cluster_block }}"
+    marker: ""
+
+- name: Create the configDropins/overrides directory
+  ansible.builtin.file:
+    path: "/opt/ibm/wlp/usr/servers/{{ server_name }}/configDropins/overrides"
+    state: directory
+    mode: '0755'
+
+- name: Ensure </server> is at the end of server.xml
+  ansible.builtin.lineinfile:
+    path: "{{ server_xml_path }}"
+    line: "</server>"
+    state: present
+    insertafter: EOF
+
+- name: Ensure </server> is at the end of collective-create-include.xml
+  ansible.builtin.lineinfile:
+    path: "{{ include_xml_path }}"
+    line: "</server>"
+    state: present
+    insertafter: EOF
+    
+- name: Ensure </server> is at the end of server.xml
+  ansible.builtin.lineinfile:
+    path: "{{ server_xml_path }}"
+    line: "</server>"
+    state: present
+    insertafter: EOF
+
+- name: Ensure </server> is at the end of collective-create-include.xml
+  ansible.builtin.lineinfile:
+    path: "{{ include_xml_path }}"
+    line: "</server>"
+    state: present
+    insertafter: EOF
+
+- name: Ensure wasadmin owns /opt/ibm and perms are 755
+  ansible.builtin.file:
+    path: /opt/ibm
+    owner: wlpadmin
+    group: enduser
+    mode: "0755"
+    recurse: yes
+  ignore_errors: yes
+
+- name: Adding the missing features in server.xml
+  ansible.builtin.blockinfile:
+    path: "{{ jvm_options_path }}"
+    block: "{{ jvm_options_variable }}"
+
+- name: awdserver restart 1
+  ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server stop awdserver;"
+  delegate_to: localhost
+  ignore_errors: yes
+
+- name: awdserver restart 2
+  ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server start awdserver;"
+  delegate_to: localhost
+  ignore_errors: yes
+
+- name: Delete Webprofile-8.0 block from server.xml
+  ansible.builtin.xml:
+    path: "{{ server_xml_path }}"
+    xpath: /server/featureManager[feature="webProfile-8.0"]
+    state: absent
+
+- name: Removing httpd existing entry
+  ansible.builtin.xml:
+    path: "{{ server_xml_path }}"
+    xpath: /server/httpEndpoint[@id="defaultHttpEndpoint"]
+    #attribute: host
+    #value: "*"
+    state: absent
+
+- name: Adding the httpd endpoint in server.xml
+  ansible.builtin.blockinfile:
+    path: "{{ server_xml_path }}"
+    insertbefore: '</server>'
+    block: "{{ httpd_endpoint }}"
+    marker: ""
+
+
+- name: Add Jassmodule feature to serverXML
+  ansible.builtin.blockinfile:
+    path: "{{ server_xml_path }}"
+    insertbefore: '</server>'
+    block: "{{ jassmodule_block }}"
+    marker: ""
+
+- name: Add quicksecurity,executor,remotefile feature to serverXML
+  ansible.builtin.blockinfile:
+    path: "{{ server_xml_path }}"
+    insertbefore: '</server>'
+    block: "{{ quicksec_executor_remotefile }}"
+    marker: ""
+
+- name: Remove quickstartsecurity from include.xml
+  ansible.builtin.lineinfile:
+    path: "{{ include_xml_path }}"
+    regexp: '<quickStartSecurity userName="" userPassword="" />'
+    state: absent
+
+
+- name: Ensure /opt/ibm/wlp/usr/servers/<server-name>/lib  directory exists
+  ansible.builtin.file:
+    path: "{{ install_dir1 }}"
+    state: directory
+    mode: '0755'
+    owner: wlpadmin
+    group: enduser
+  become_user: root
+  become: yes
+
+- name: Download JDBC.Jar file
+  ansible.builtin.get_url:
+    url: "{{ jdbc_location }}"
+    dest: "{{ install_dir1 }}"
+    mode: '0755'
+
+- name: Copy awd.war to apps directory
+  ansible.builtin.copy:
+    src: "{{ awdwar_file_location }}"
+    dest: "{{ apps_dir }}"
+    mode: '0755'
+    remote_src: yes
+
+- name: Download RetrieveObjectWrapper.war file
+  ansible.builtin.get_url:
+    url: "{{ retrive_war_location }}"
+    dest: "{{ apps_dir }}"
+    mode: '0755'
+
+
+- name: Enable New Relic
+  import_tasks: newrelic_hook.yml
+  become_user: root
+  become: true
+
+### Splunk forwarder
+- name: Add splunk config
+  import_tasks: "splunk_forwarder.yml"
+  become_user: root
+  become: true
+
+### Cron jobs to purge log files
+- name: Setup cronjobs to purge log files
+  import_tasks: "cronjobs.yml"
+  become_user: root
+  become: true
+
+- name: Copy NW_security_defaults.xml
+  copy:
+    src: files/NW_security_defaults.xml
+    dest: /opt/ibm/wlp/usr/servers/{{ server_name }}/configDropins/overrides/NW_security_defaults.xml
+
+- name: Copy liberty.service
+  copy:
+    src: files/liberty.service
+    dest: /etc/systemd/system/liberty_{{ server_name }}.service
+  become_user: root
+
+- name: Update the server_name in the service
+  replace:
+    path: /etc/systemd/system/liberty_{{ server_name }}.service
+    regexp: 'SERVERNAME'
+    replace: '{{ server_name }}'
+  become_user: root
+
+- name: Update the userid in the service
+  replace:
+    path: /etc/systemd/system/liberty_{{ server_name }}.service
+    regexp: 'USERID'
+    replace: '{{ userid }}'
+  become_user: root
+
+
+- name: Update the groupid in the service
+  replace:
+    path: /etc/systemd/system/liberty_{{ server_name }}.service
+    regexp: 'GROUPID'
+    replace: '{{ groupid }}'
+  become_user: root
+
+- name: Add DB user,pass details to server.xml
+  ansible.builtin.blockinfile:
+    path: "{{ server_xml_path }}"
+    marker: ""
+    block: "{{ db_jdbc_block }}"
+    insertbefore: '^</server>'
+
+- name: Download and place DCD file
+  ansible.builtin.get_url:
+    url: "{{ dcd_file_git }}"
+    dest: "{{ dcd_resources_dir }}"
+    mode: '0755'
+
+- name: Download and place SSO file
+  ansible.builtin.get_url:
+    url: "{{ sso_url }}/{{ item }}"
+    dest: "{{ dcd_resources_dir }}"
+    mode: '0755'
+  loop: "{{ sso_file }}"
+
+- name: awdserver restart 1 final
+  ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server stop awdserver;"
+  delegate_to: localhost
+  ignore_errors: yes
+
+- name: awdserver restart 2 final
+  ansible.builtin.shell: ssh wlpadmin@"{{ controller_ip }}" "/opt/ibm/wlp/bin/server start awdserver;"
+  delegate_to: localhost
+  ignore_errors: yes
+

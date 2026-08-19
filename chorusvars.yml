@@ -1,0 +1,15 @@
+---
+# vars file for apache-tomcat
+chorus_bin: "AWD24.1.0.0-20240807-163333.bin"
+chorus_install_dir: "/opt/chorus"
+chorus_file_location: "/home/wlpadmin/roles/chorus/files/"
+response_path: "/home/wlpadmin/chorus/files/response.properties"
+container_choice: "2"
+jdk_version: 1.8.0
+xml_location: https://github.com/nw/nf-awd-test-cdk/raw/main/tests
+xml_download_location: "/opt/chorus/bin/"
+chorus_key_location: "/opt/chorus/bin/key/"
+server_name: "awdserver"
+controller_server_xml: "/opt/ibm/wlp/usr/servers/awdserver/server.xml"
+chorus_bin_git: https://github.net/nw/nf-awd-chorus/raw/main/AWD24.1.0.0-20240807-163333.bin
+jdbc_location: https://github.net/nw/nf-awd-chorus/raw/main/ojdbc8.jar

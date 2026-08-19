@@ -1,0 +1,229 @@
+---
+#file: main.yml
+#Description: Install IBM HTTPD Server via a zipfile (not IIM with response files)
+- name: "Pre-requisites"
+   import_tasks: prereq.yml
+   become: true
+   become_user: root
+
+- name: "Install Java-1.8"
+   import_tasks: javainstall.yml
+   become: true
+   become_user: root
+
+### Download the IHS zipfile
+- name: Download IHS zip file
+   become: yes
+   ansible.builtin.get_url:
+     url: https://art.net/artifactory/vendor-artifacts/IBM/IHS/9.0.5-WS-IHS-ARCHIVE-linux-x86_64-FP{{ version }}.zip
+     dest: /tmp/ihs.zip
+
+- name: Ensure chorus install directory exists
+   ansible.builtin.file:
+     path: "/opt/ibm"
+     state: directory
+     owner: wlpadmin
+     group: enduser
+     mode: '0755'
+   become: true
+   become_user: root
+
+### Unzip the zipfile
+- name: Unarchive ihs.zip
+   become: yes
+   ansible.builtin.unarchive:
+     src: /tmp/ihs.zip
+     dest: /opt/ibm
+     remote_src: yes
+     owner: "{{ userid }}"
+     group: "{{ groupid }}"
+
+- name: Delete ihs.zip
+   become: yes
+   ansible.builtin.file:
+     path: /tmp/ihs.zip
+     state: absent
+
+
+
+### Copy Nationwide's modified httpd.conf
+- name: Copy modified Nationwide httpd.conf to be used as the template
+   become: yes
+   copy:
+     src: files/NW_IHS_9_0_5_template.httpd.conf
+     dest: /opt/ibm/IHS/conf/httpd.conf.default
+     mode: '0644'
+
+### Create the server
+- name: Create the default instance
+   become: yes
+   command: /opt/ibm/IHS/postinstall.sh
+
+### IBM's script is interactive - modify it
+- name: Replace read in script
+   become: yes
+   ansible.builtin.replace:
+     path: /opt/ibm/IHS/bin/quickssl.sh
+     regexp: '^\s*read\s+-s\s+KDBPASS\s*$'
+     replace: 'KDBPASS="$1"'
+
+### Create self-signed cert via quicksll.sh
+- name: Create self-signed SSL cert
+   become: yes
+   command: /opt/ibm/IHS/bin/quickssl.sh "{{ phrase }}"
+
+- name: Comment out Listen 443 and add note
+   become: yes
+   ansible.builtin.replace:
+     path: /opt/ibm/IHS/conf/httpd.conf
+     regexp: '^Listen\s+443'
+     replace: '#Listen 443 #Do not run on port 443 but on port 20001'
+
+### the quickssl.sh creates that VirtualHost which was incorportated into the template
+###   ...the keystore is created by the quicksll.sh script
+- name: Remove <VirtualHost *:443> block from httpd.conf
+   become: yes
+   ansible.builtin.replace:
+     path: /opt/ibm/IHS/conf/httpd.conf
+     regexp: '(?s)<VirtualHost \*:443>.*?</VirtualHost>'
+     replace: '#VirtualHost 443 block removed'
+
+- name: Adding the missing features in httpd.conf
+   ansible.builtin.blockinfile:
+     path: "{{ httpd_path }}"
+     block: "{{ httpd_lines }}"
+
+
+### Add Service Startup on boot
+- name: Copy ihs.service
+   become: yes
+   become_user: root
+   copy:
+     src: files/ihs.service
+     dest: /etc/systemd/system/ihs.service
+     mode: '0644'
+
+- name: Update the userid in the service
+   become: yes
+   become_user: root
+   replace:
+     path: /etc/systemd/system/ihs.service
+     regexp: 'USERID'
+     replace: '{{ userid }}'
+
+- name: Update the groupid in the service
+   become: yes
+   become_user: root
+   replace:
+     path: /etc/systemd/system/ihs.service
+     regexp: 'GROUPID'
+     replace: '{{ groupid }}'
+
+- name: Enable service
+   become: yes
+   become_user: root
+   command: systemctl enable ihs.service
+
+### Add log rotation daemon config for access and error logs
+- name: Copy ihs_logrotate.conf
+   become: yes
+   become_user: root
+   copy:
+     src: files/ihs_logrotate.conf
+     dest: /etc/logrotate.d/ibm-httpd-server
+     mode: '0644'
+     owner: root
+     group: root
+
+### Splunk Forwarder
+- name: Add splunk config
+   import_tasks: "splunk_forwarder.yml"
+   become: yes
+   become_user: root
+
+### Cron jobs to purge log files
+- name: Setup cronjobs to purge log files
+   import_tasks: "cronjobs.yml"
+   become: yes
+   become_user: root
+
+
+## Set the ownership of all files under /opt/ibm to wlpadmin:enduser
+- name: Ensure ownership of /opt/ibm/IHS directories and files
+   become: yes
+   become_user: root
+   file:
+     path: /opt/ibm
+     mode: '0755'
+     owner: "{{ userid }}"
+     group: "{{ groupid }}"
+     recurse: yes
+
+- name: Start IHS server
+   ansible.builtin.command: "./apachectl start"
+   args:
+     chdir: "/opt/ibm/IHS/bin"
+   ignore_errors: yes
+
+- name: Start IHS server
+   ansible.builtin.shell: "ps -ef|grep -i httpd"
+   register: httpd_process
+
+- name: Ensure ownership of /opt/ibm/IHS directories and files
+   become: yes
+   become_user: root
+   file:
+     path: /opt/ibm
+     mode: '0755'
+     owner: "{{ userid }}"
+     group: "{{ groupid }}"
+     recurse: yes
+
+- name: Create Javascript directory and assign permission
+   become: yes
+   become_user: root
+   file:
+     path: /opt/ibm/IHS/htdocs/awd/common/custom/js
+     state: directory
+     mode: '0755'
+     owner: "{{ userid }}"
+     group: "{{ groupid }}"
+
+- name: Downlowd js files to the destination
+   ansible.builtin.get_url:
+     url: "{{ js_file_url }}/{{ item }}"
+     dest: "{{ js_files_dir }}/{{ item }}"
+     mode: '0755'
+   loop: "{{ js_github_files }}"
+
+- name: Create CSS directory and assign permission
+   become: yes
+   become_user: root
+   file:
+     path: /opt/ibm/IHS/htdocs/awd/common/custom/css
+     state: directory
+     mode: '0755'
+     owner: "{{ userid }}"
+     group: "{{ groupid }}"
+
+- name: Downlowd CSS files to the destination
+   ansible.builtin.get_url:
+     url: "{{ css_file_url }}/{{ item }}"
+     dest: "{{ css_files_dir }}/{{ item }}"
+     mode: '0755'
+   loop: "{{ css_github_files }}"
+
+- name: Downlowd XML files to the destination
+   ansible.builtin.get_url:
+     url: "{{ xml_file_url }}/{{ item }}"
+     dest: "{{ xml_files_dir }}/{{ item }}"
+     mode: '0755'
+   loop: "{{ xml_github_files }}"
+
+- name: Downlowd HTML files to the destination
+   ansible.builtin.get_url:
+     url: "{{ indexhtml_file_url }}/{{ item }}"
+     dest: "{{ indexhtml_files_dir }}/{{ item }}"
+     mode: '0755'
+   loop: "{{ indexhtml_github_files }}"
+ 

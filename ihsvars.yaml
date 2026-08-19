@@ -1,0 +1,46 @@
+---
+# vars file for apache-tomcat
+phrase: "changeit"
+httpd_path: "/opt/ibm/IHS/conf/httpd.conf"
+httpd_lines: |
+  # Identify AWD-specific traffic and format AWD log files.
+  Header set awd-content "%D"
+  LogFormat "%D \t %h %l %u %t \"%r\" %>s %b \"%{Referer}i\" \"%{User-Agent}i\"" awd
+  CustomLog logs/awdaccess_log awd
+
+  RewriteEngine On
+  RewriteCond %{REQUEST_METHOD} GET
+  RewriteRule ^/ImageRetrieval(.*)$ http://ImageRetrievalHost/ImageRetrieval$1 [P]
+
+js_file_url: https://github.net/nw/AWD-NF-WEB-JS-IT-7859-serv/raw/upgradeMain
+js_files_dir: "/opt/ibm/IHS/htdocs/awd/common/custom/js"
+js_github_files:
+  - addAssociation.js
+  - .project
+  - A7859_AWDNF_ServiceRules.wsdl
+  - A7859_AWD_NF_CreateWorkItemRoutingOperation.wsdl
+  - A7859_AWD_NF_QCSamplingServiceOperation.wsdl
+
+
+css_file_url: https://github.net/nw/AWD-NF-WEB-CSS-7859-csb/raw/main
+css_files_dir: "/opt/ibm/IHS/htdocs/awd/common/custom/css"
+css_github_files:
+  - chrome-fix.css
+  - customCSS.css
+  - modalLayout.css
+  - p2ISummary.css
+  - Theme_BlueGreen.css
+
+xml_file_url: https://github.net/nw/AWD-NF-WEB-XML-7859-csb/raw/upgradeMain
+xml_files_dir: "/opt/ibm/IHS/htdocs/awd/common/custom"
+xml_github_files:
+  - CCMExcel.xml
+  - customJS.xml
+
+indexhtml_file_url: https://github.nwie.net/nw/AWD-NF-CUSTOM-WEB-7859-csb/raw/upgradeMain
+indexhtml_files_dir: "/opt/ibm/IHS/htdocs"
+indexhtml_github_files:
+  - awdstatus.html
+  - index.html
+  - userAvailability.js
+ 

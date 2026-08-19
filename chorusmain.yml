@@ -1,0 +1,175 @@
+---
+- name: "Pre-requisites"
+  import_tasks: prereq.yml
+  become: true
+  become_user: root
+
+- name: "Install Java-1.8"
+  import_tasks: javainstall.yml
+  become: true
+  become_user: root
+
+- name: Ensure chorus install directory exists
+  ansible.builtin.file:
+    path: "/opt/chorus"
+    state: directory
+    owner: wlpadmin
+    group: enduser
+    mode: '0755'
+  become: true
+  become_user: root
+
+- name: Ensure file location  directory exists
+  ansible.builtin.file:
+    path: "{{ chorus_file_location }}"
+    state: directory
+    owner: wlpadmin
+    group: enduser
+    mode: '0755'
+  become: true
+  become_user: root
+
+- name: Downlowd chorus bin from Github
+  ansible.builtin.get_url:
+    url: "{{ chorus_bin_git }}"
+    dest: "{{ chorus_install_dir }}"
+    mode: '0755'
+
+- name: Set execute permisson via chmod
+  ansible.builtin.command: chmod +x "{{ chorus_install_dir }}/{{ chorus_bin }}"
+  become_user: root
+
+
+- name: Run interactive installer and respond automatically
+  ansible.builtin.expect:
+    command: "{{ chorus_install_dir }}/AWD24.1.0.0-20240807-163333.bin -i console"
+    chdir: /opt/chorus
+    responses:
+        'PRESS <ENTER> TO CONTINUE': ''
+        '(?i)do you accept.*license agreement.*\(y/n\)': 'Y'
+        '(?i)ENTER THE NUMBER FOR THE INSTALL SET, OR PRESS <ENTER> TO ACCEPT THE DEFAULT': '1'
+        #"Select the install set.*\\(1\\.- Complete\\)": "1\n"
+        '(?i)Default install folder.*PRESS <ENTER> TO ACCEPT': '/opt/chorus'
+        '(?i)IS THIS CORRECT.*\(y/n\)': 'Y'
+        '(?i)Path to Java 1.8 or later': '/usr/lib/jvm/java-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/'
+        '(?i)Select the appropriate JEE Container.*': '2'
+        '(?i)Choose the database.*': '1'
+        '(?i)Do you want to overwrite the existing file?': '1'
+        '(?i)Press <ENTER> TO EXIT.*': ''
+    echo: yes
+    timeout: 60
+
+- name: Replace awddb.xml
+  ansible.builtin.template:
+    src: awddb.xml.j2
+    dest: "{{ xml_download_location }}/awddb.xml"
+    mode: '0755'
+
+- name: Replace awdidb.xml
+  ansible.builtin.template:
+    src: awdbidb.xml.j2
+    dest: "{{ xml_download_location }}/awdbidb.xml"
+    mode: '0755'
+
+- name: Download JDBC.Jar file
+  ansible.builtin.get_url:
+    url: "{{ jdbc_location }}"
+    dest: "{{ xml_download_location }}"
+    mode: '0755'
+
+- name: Commenting existing values- awdenv.sh file
+  ansible.builtin.lineinfile:
+    path: /opt/chorus/bin/awdenvironment.sh
+    regexp: '^(export JDBCDRIVER_JAR)'
+    line: '# \g<0>'
+    backrefs: yes
+
+#- name: Updating awdenv.sh file
+#  ansible.builtin.blockinfile:
+#    path: /opt/chorus/bin/awdenvironment.sh
+#    block: |
+#      export JDBCDRIVER_JAR; JDBCDRIVER_JAR="/opt/chorus/bin/ojdbc8.jar"
+#export AWD_JAVA_PATH; AWD_JAVA_PATH="/usr/lib/jvm/jre-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin"
+
+- name: Insert a JDBC driver line
+  ansible.builtin.lineinfile:
+    path: /opt/chorus/bin/awdenvironment.sh
+    insertafter: '^export AWD_JAVA_PATH'
+    line: 'export JDBCDRIVER_JAR; JDBCDRIVER_JAR="/opt/chorus/bin/ojdbc8.jar"'
+
+- name: Ensure Chorus Key  directory exists
+  ansible.builtin.file:
+    path: "{{ chorus_key_location }}"
+    state: directory
+    owner: wlpadmin
+    group: enduser
+    mode: '0755'
+  become: true
+  become_user: root
+
+- name: Ensure keystore directory exists
+  ansible.builtin.file:
+    path: "/opt/chorus/key"
+    state: directory
+    owner: wlpadmin
+    group: enduser
+    mode: '0755'
+  become: true
+  become_user: root
+
+- name: Execute passwordencryption.sh command
+  ansible.builtin.command: >
+    /opt/chorus/bin/passwordencryption.sh
+    -convert
+    -keystore=/opt/chorus/key/awdkeystore.jks
+    -storepass='changeit'
+    -alias=choruskey
+    -print
+  args:
+    chdir: /opt/chorus/bin
+  register: encryption_result
+  ignore_errors: no
+
+- name: Commenting existing values- awdenv.sh
+  ansible.builtin.lineinfile:
+    path: /opt/chorus/bin/awdenvironment.sh
+    line: 'export AWD_JAVA_PATH; AWD_JAVA_PATH="/usr/lib/jvm/jre-1.8.0-openjdk-1.8.0.462.b08-3.el9.x86_64/bin/java"'
+    state: absent
+
+#- name: Copy awd.war to apps directory
+#  ansible.builtin.copy:
+#    src: "{{ awdwar_file_location }}"
+#    dest: "{{ apps_dir }}"
+#    mode: '0755'
+#    remote_src: yes
+
+#- name: Run Liberty server status
+#  ansible.builtin.command: /opt/ibm/wlp/bin/server status awdserver
+#  register: liberty_start
+#  changed_when: false
+#  ignore_errors: yes
+
+#- name: Show Liberty server start output
+#  ansible.builtin.debug:
+#    msg: "{{ liberty_start.stdout }}"
+
+
+#  - name: Copy chorus installer
+#    ansible.builtin.copy:
+#      src: "{{ xml_location }}"
+#      dest: "{{ chorus_install_dir }}"
+#      mode: '0755'
+
+#  - name: Apply XML updates
+#    xml:
+#      path: "{{ xml_path }}"
+#      xpath: "{{ item.xpath }}"
+#      value: "{{ item.value }}"
+#    loop: "{{ xml_updates }}"
+#  - name: Apply XML updates
+#    xml:
+#      path: "{{ xml_paths }}"
+#      xpath: "{{ item.xpath }}"
+#      value: "{{ item.value }}"
+#    loop: "{{ xml_update }}"
+
